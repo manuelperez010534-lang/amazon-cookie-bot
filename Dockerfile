@@ -1,14 +1,18 @@
-# Usamos la imagen oficial de Playwright que ya trae Python y los navegadores
-FROM mcr.microsoft.com/playwright/python:v1.42.0-jammy
+# Usamos la imagen que ya tiene Python y los navegadores instalados
+FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
 
-# Directorio de trabajo
+# Evitamos que Python genere archivos .pyc
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
 WORKDIR /app
 
-# Copiar archivos del proyecto
-COPY . .
-
-# Instalar dependencias de Python
+# Instalamos las librerías de Python
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Comando para ejecutar el bot
+# Copiamos el resto del código
+COPY . .
+
+# Ejecutamos el bot
 CMD ["python", "amazon_bot.py"]
