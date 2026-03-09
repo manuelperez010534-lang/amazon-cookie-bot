@@ -1,4 +1,4 @@
 playwright==1.42.0
 requests==2.32.5
 pyTelegramBotAPI==4.31.0
-anti-captcha
+git+https://github.com/AdminAnticaptcha/anticaptcha-python.git
