@@ -1,0 +1,8 @@
+[phases.setup]
+nixPkgs = ["python3", "playwright-driver", "glib", "nss", "nspr", "atk", "at-spi2-atk", "libdrm", "expat", "libxcb", "libX11", "libXcomposite", "libXdamage", "libXext", "libXfixes", "libXrandr", "libgbm", "pango", "cairo", "asound"]
+
+[phases.build]
+cmds = ["pip install -r requirements.txt", "playwright install chromium"]
+
+[start]
+cmd = "python amazon_bot.py"
