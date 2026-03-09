@@ -4,121 +4,113 @@ import time
 import requests
 import re
 import telebot
+import random
 from playwright.sync_api import sync_playwright
 
-# CONFIGURACIÓN (Railway toma esto de tus Variables)
+# CONFIGURACIÓN
 TOKEN = os.getenv("TELEGRAM_TOKEN", "8461610558:AAG9_DipzDcqmWYmAbb-LucReBzsI4-t_bE")
 CHAT_ID = os.getenv("CHAT_ID", "8191397359")
-SMS_KEY = os.getenv("SMS_KEY", "4fff057f7ba6b313169973cde3a8d7bf")
 
 bot = telebot.TeleBot(TOKEN)
 
 def send_log(msg):
     print(msg)
-    try:
-        bot.send_message(CHAT_ID, f"📢 **Estado:** {msg}", parse_mode="Markdown")
-    except:
-        pass
+    try: bot.send_message(CHAT_ID, f"📢 **Estado:** {msg}", parse_mode="Markdown")
+    except: pass
 
-# --- FUNCIÓN DE CORREO MEJORADA ---
-def get_mail():
-    # Lista de dominios disponibles en 1secmail
-    domains = ["1secmail.com", "1secmail.org", "1secmail.net"]
-    for dom in domains:
-        try:
-            res = requests.get(f"https://www.1secmail.com/api/v1/?action=genRandomMailbox&count=1").json()
-            if res:
-                return res[0]
-        except:
-            continue
-    return None
+# --- GENERADOR DE DATOS ALEATORIOS ---
+def get_random_name():
+    nombres = ["Manuel", "Jose", "Luis", "Carlos", "Andres", "Javier", "Pedro"]
+    apellidos = ["Perez", "Garcia", "Rodriguez", "Sanchez", "Ramirez", "Torres"]
+    return f"{random.choice(nombres)} {random.choice(apellidos)}"
 
-def wait_for_otp(email):
-    user, domain = email.split('@')
-    send_log("📩 Esperando el código OTP de Amazon...")
-    for _ in range(30): # 3 minutos de espera
-        time.sleep(6)
-        url = f"https://www.1secmail.com/api/v1/?action=getMessages&login={user}&domain={domain}"
-        try:
-            msgs = requests.get(url).json()
-            for m in msgs:
-                if "amazon" in m['from'].lower() or "verification" in m['subject'].lower():
-                    # Leer el cuerpo del mensaje
-                    msg_id = m['id']
-                    read_url = f"https://www.1secmail.com/api/v1/?action=readMessage&login={user}&domain={domain}&id={msg_id}"
-                    full = requests.get(read_url).json()
-                    otp = re.search(r'(\d{6})', full['body'])
-                    if otp:
-                        return otp.group(1)
-        except:
-            continue
-    return None
+# --- NUEVA FUNCIÓN DE CORREO (USANDO GUERRILLA MAIL API) ---
+class MailBox:
+    def __init__(self):
+        self.session = requests.Session()
+        self.base_url = "https://www.guerrillamail.com/ajax.php"
+        self.email = ""
+        self.sid_token = ""
+
+    def get_email(self):
+        res = self.session.get(f"{self.base_url}?f=get_email_address").json()
+        self.email = res['email_addr']
+        self.sid_token = res['sid_token']
+        return self.email
+
+    def check_otp(self):
+        res = self.session.get(f"{self.base_url}?f=check_email&seq=0").json()
+        for msg in res.get('list', []):
+            if "amazon" in msg['mail_from'].lower():
+                full_msg = self.session.get(f"{self.base_url}?f=fetch_email&email_id={msg['mail_id']}").json()
+                otp = re.search(r'(\d{6})', full_msg['mail_body'])
+                if otp: return otp.group(1)
+        return None
 
 # --- PROCESO PRINCIPAL ---
 def run_bot():
-    send_log("🚀 **Iniciando proceso de registro en Amazon**")
+    send_log("🚀 **Iniciando proceso con nombres aleatorios...**")
+    mailbox = MailBox()
     
     with sync_playwright() as p:
-        # Lanzamos el navegador
         browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
         context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         page = context.new_page()
 
         try:
             # 1. Correo
-            email = get_mail()
+            email = mailbox.get_email()
             if not email:
-                send_log("❌ Error fatal: No se pudo generar un correo temporal.")
+                send_log("❌ Error fatal: Guerrilla Mail no responde.")
                 return
-            send_log(f"📧 Correo asignado: `{email}`")
+            
+            nombre_completo = get_random_name()
+            send_log(f"📧 Correo: `{email}`\n👤 Nombre: `{nombre_completo}`")
 
-            # 2. Formulario de Amazon
-            send_log("🔗 Navegando a Amazon Register...")
-            page.goto("https://www.amazon.com/ap/register", wait_until="networkidle", timeout=60000)
+            # 2. Amazon
+            send_log("🔗 Entrando a Amazon...")
+            page.goto("https://www.amazon.com/ap/register", wait_until="networkidle")
 
-            send_log("✍️ Llenando datos: Manuel Perez...")
-            page.fill("#ap_customer_name", "Manuel Perez")
+            send_log(f"✍️ Escribiendo datos de {nombre_completo}...")
+            page.fill("#ap_customer_name", nombre_completo)
             page.fill("#ap_email", email)
             page.fill("#ap_password", "Admin.2026$")
             page.fill("#ap_password_check", "Admin.2026$")
             
-            send_log("🔘 Click en 'Continuar'...")
             page.click("#continue")
             
-            # 3. Esperar OTP
-            otp = wait_for_otp(email)
+            # 3. Esperar OTP (60 segundos máximo)
+            send_log("📩 Esperando OTP en bandeja de entrada...")
+            otp = None
+            for _ in range(15):
+                time.sleep(5)
+                otp = mailbox.check_otp()
+                if otp: break
+            
             if otp:
-                send_log(f"🔢 OTP Recibido: `{otp}`. Insertando...")
-                # Esperar a que el campo de OTP esté visible
-                page.wait_for_selector("input[name='code']", timeout=10000)
+                send_log(f"🔢 OTP Recibido: `{otp}`. Verificando...")
                 page.fill("input[name='code']", otp)
                 page.click("#cvf-submit-otp-button")
                 page.wait_for_load_state("networkidle")
-                send_log("✅ Código verificado.")
             else:
-                send_log("❌ El código OTP nunca llegó. Abortando.")
+                send_log("❌ OTP no llegó. Puede que Amazon pida Captcha.")
+                page.screenshot(path="failed.png")
+                with open("failed.png", "rb") as f: bot.send_photo(CHAT_ID, f)
                 return
 
-            # 4. Finalización y Cookies
-            send_log("🍪 ¡Registro exitoso! Generando archivo de Cookies...")
+            # 4. Finalizar y Cookies
+            send_log("🍪 ¡Éxito! Extrayendo cookies...")
             time.sleep(5)
             cookies = context.cookies()
             
-            # Guardar Cookies en JSON
-            cookie_file = "amazon_cookies.json"
-            with open(cookie_file, "w") as f:
+            with open("amazon_cookies.json", "w") as f:
                 json.dump(cookies, f, indent=2)
             
-            # Enviar el archivo a Telegram
-            with open(cookie_file, "rb") as doc:
-                bot.send_document(CHAT_ID, doc, caption="📦 **Aquí tienes tus Cookies de Amazon**\nCuenta creada con éxito.")
+            with open("amazon_cookies.json", "rb") as doc:
+                bot.send_document(CHAT_ID, doc, caption=f"✅ Cuenta creada para {nombre_completo}")
 
         except Exception as e:
-            send_log(f"⚠️ Error durante el proceso: {str(e)}")
-            # Tomar foto del error para saber qué pasó
-            page.screenshot(path="error.png")
-            with open("error.png", "rb") as photo:
-                bot.send_photo(CHAT_ID, photo, caption="📸 Captura del error en Amazon")
+            send_log(f"⚠️ Error: {str(e)}")
         finally:
             browser.close()
             send_log("🏁 Bot finalizado.")
