@@ -8,12 +8,11 @@ import requests
 import base64
 from playwright.async_api import async_playwright
 
-# === CONFIGURACIÓN ===
-TOKEN = os.getenv("TELEGRAM_TOKEN", "8461610558:AAG9_DipzDcqmWYmAbb-LucReBzsI4-t_bE")
-CHAT_ID = os.getenv("CHAT_ID", "8191397359")
-AC_KEY = os.getenv("ANTI_CAPTCHA_KEY", "37f2bc34098021f0fcb8ed61cc7b3782")
+# === CONFIG ===
+TOKEN = "8461610558:AAG9_DipzDcqmWYmAbb-LucReBzsI4-t_bE"
+CHAT_ID = "8191397359"
+AC_KEY = "37f2bc34098021f0fcb8ed61cc7b3782"
 
-# Proxy Webshare
 PROXY = {
     "server": "http://p.webshare.io:80",
     "username": "vgdgihxr-rotate",
@@ -24,72 +23,70 @@ bot = telebot.TeleBot(TOKEN)
 
 def send_log(msg):
     print(msg)
-    try: bot.send_message(CHAT_ID, f"📢 **Bot Amazon:** {msg}", parse_mode="Markdown")
+    try: bot.send_message(CHAT_ID, f"🤖 **Amazon:** {msg}", parse_mode="Markdown")
     except: pass
 
-# --- FUNCIÓN PROPIA PARA ANTI-CAPTCHA (SIN LIBRERÍAS) ---
-async def solve_amazon_captcha(page):
+# --- RESOLUTOR DIRECTO POR API (SIN LIBRERÍAS) ---
+async def solve_captcha_direct(page):
     captcha_img = await page.query_selector('img[src*="captcha"]')
     if not captcha_img: return False
 
     try:
-        send_log("🧩 Captcha detectado. Resolviendo vía API...")
+        send_log("🧩 Captcha detectado. Resolviendo...")
         img_url = await captcha_img.get_attribute("src")
-        
-        # Descargar imagen y convertir a Base64
-        img_data = base64.b64encode(requests.get(img_url).content).decode('utf-8')
-        
-        # Crear tarea en Anti-Captcha
-        create_task = requests.post("https://api.anti-captcha.com/createTask", json={
+        img_content = requests.get(img_url).content
+        img_b64 = base64.b64encode(img_content).decode('utf-8')
+
+        # Crear Tarea
+        task = requests.post("https://api.anti-captcha.com/createTask", json={
             "clientKey": AC_KEY,
-            "task": {"type": "ImageToTextTask", "body": img_data}
+            "task": {"type": "ImageToTextTask", "body": img_b64}
         }).json()
         
-        task_id = create_task.get("taskId")
+        task_id = task.get("taskId")
         if not task_id: return False
 
-        # Esperar resultado
-        for _ in range(10):
+        # Consultar Resultado
+        for _ in range(20):
             await asyncio.sleep(3)
-            result = requests.post("https://api.anti-captcha.com/getTaskResult", json={
+            res = requests.post("https://api.anti-captcha.com/getTaskResult", json={
                 "clientKey": AC_KEY, "taskId": task_id
             }).json()
-            if result.get("status") == "ready":
-                captcha_text = result["solution"]["text"]
-                send_log(f"✅ Captcha resuelto: `{captcha_text}`")
-                await page.fill("#captchacharacters", captcha_text)
+            if res.get("status") == "ready":
+                code = res["solution"]["text"]
+                send_log(f"✅ Resuelto: `{code}`")
+                await page.fill("#captchacharacters", code)
                 await page.press("#captchacharacters", "Enter")
                 return True
-    except: pass
+    except Exception as e: print(f"Error captcha: {e}")
     return False
 
-# --- MANEJO DE CORREO (Guerrilla Mail) ---
-class MailBox:
+# --- CORREO TEMPORAL ---
+class Mailer:
     def __init__(self):
-        self.session = requests.Session()
-        self.email = ""
+        self.sess = requests.Session()
+        self.url = "https://www.guerrillamail.com/ajax.php"
     
-    async def get_mail(self):
-        res = self.session.get("https://www.guerrillamail.com/ajax.php?f=get_email_address").json()
-        self.email = res['email_addr']
-        return self.email
+    async def get_email(self):
+        r = self.sess.get(f"{self.url}?f=get_email_address").json()
+        return r['email_addr']
 
-    async def wait_otp(self):
-        send_log("📩 Esperando código de Amazon...")
-        for _ in range(15):
+    async def get_otp(self):
+        send_log("📩 Esperando OTP...")
+        for _ in range(12):
             await asyncio.sleep(10)
-            res = self.session.get("https://www.guerrillamail.com/ajax.php?f=check_email&seq=0").json()
-            for m in res.get('list', []):
+            r = self.sess.get(f"{self.url}?f=check_email&seq=0").json()
+            for m in r.get('list', []):
                 if "amazon" in m['mail_from'].lower():
-                    full = self.session.get(f"https://www.guerrillamail.com/ajax.php?f=fetch_email&email_id={m['mail_id']}").json()
+                    full = self.sess.get(f"{self.url}?f=fetch_email&email_id={m['mail_id']}").json()
                     otp = re.search(r'(\d{6})', full['mail_body'])
                     if otp: return otp.group(1)
         return None
 
-# --- PROCESO DE REGISTRO ---
-async def run_bot():
-    mailbox = MailBox()
-    name = f"User_{random.randint(1000, 9999)}"
+# --- MOTOR PRINCIPAL ---
+async def main():
+    mailer = Mailer()
+    user_name = f"Zeus_{random.randint(100,999)}"
     
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, proxy=PROXY)
@@ -97,40 +94,38 @@ async def run_bot():
         page = await context.new_page()
 
         try:
-            email = await mailbox.get_mail()
-            send_log(f"🚀 Creando cuenta: `{name}`\n📧 Correo: `{email}`")
+            email = await mailer.get_email()
+            send_log(f"🚀 Iniciando: `{email}`")
 
             await page.goto("https://www.amazon.com/ap/register")
-            await solve_amazon_captcha(page)
+            await solve_captcha_direct(page)
 
-            await page.fill("#ap_customer_name", name)
+            await page.fill("#ap_customer_name", user_name)
             await page.fill("#ap_email", email)
-            await page.fill("#ap_password", "Admin.2026$")
-            await page.fill("#ap_password_check", "Admin.2026$")
+            await page.fill("#ap_password", "ZeuS_2026_!")
+            await page.fill("#ap_password_check", "ZeuS_2026_!")
             await page.click("#continue")
             
-            await asyncio.sleep(5)
-            await solve_amazon_captcha(page)
+            await asyncio.sleep(4)
+            await solve_captcha_direct(page)
 
-            otp = await mailbox.wait_otp()
+            otp = await mailer.get_otp()
             if otp:
-                send_log(f"🔢 OTP Recibido: `{otp}`")
+                send_log(f"🔢 OTP: `{otp}`")
                 await page.fill("input[name='code']", otp)
                 await page.click("#cvf-submit-otp-button")
                 await page.wait_for_load_state("networkidle")
                 
-                # Éxito: Cookies
+                # Guardar Sesión
                 cookies = await context.cookies()
-                with open("cookies.json", "w") as f: json.dump(cookies, f, indent=2)
-                with open("cookies.json", "rb") as f:
-                    bot.send_document(CHAT_ID, f, caption=f"✅ Cuenta Creada: {email}")
+                with open("sesion.json", "w") as f: json.dump(cookies, f)
+                with open("sesion.json", "rb") as f:
+                    bot.send_document(CHAT_ID, f, caption=f"✅ Creada: {email}")
             else:
-                send_log("❌ No se recibió OTP.")
+                send_log("❌ No llegó el OTP")
 
-        except Exception as e:
-            send_log(f"⚠️ Error: {str(e)}")
-        finally:
-            await browser.close()
+        except Exception as e: send_log(f"⚠️ Error: {str(e)}")
+        finally: await browser.close()
 
 if __name__ == "__main__":
-    asyncio.run(run_bot())
+    asyncio.run(main())
