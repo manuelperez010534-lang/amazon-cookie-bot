@@ -4,23 +4,25 @@ import time
 import requests
 import re
 import telebot
+import subprocess
 from playwright.sync_api import sync_playwright
 
-# === CONFIGURACIÓN DE APIS (Usa Variables de Entorno en Railway) ===
-TELEGRAM_TOKEN = "8461610558:AAG9_DipzDcqmWYmAbb-LucReBzsI4-t_bE"
-CHAT_ID = "TU_CHAT_ID_AQUÍ"  # <--- CAMBIA ESTO (Usa @userinfobot en Telegram para saber el tuyo)
-SMS_KEY = "4fff057f7ba6b313169973cde3a8d7bf"
+# === CONFIGURACIÓN ===
+# Railway leerá estas variables de la pestaña "Variables"
+TOKEN = os.getenv("TELEGRAM_TOKEN", "8461610558:AAG9_DipzDcqmWYmAbb-LucReBzsI4-t_bE")
+CHAT_ID = os.getenv("CHAT_ID", 8191397359") # Asegúrate de ponerlo en Railway
+SMS_KEY = os.getenv("SMS_KEY", "4fff057f7ba6b313169973cde3a8d7bf")
 
-# Inicializar Bot de Telegram
-tbot = telebot.TeleBot(TELEGRAM_TOKEN)
+bot = telebot.TeleBot(TOKEN)
 
 def send_log(msg):
     print(msg)
     try:
-        tbot.send_message(CHAT_ID, f"🤖 **Log:** {msg}", parse_mode="Markdown")
-    except: pass
+        bot.send_message(CHAT_ID, f"🤖 **Bot Amazon:** {msg}", parse_mode="Markdown")
+    except Exception as e:
+        print(f"Error enviando Telegram: {e}")
 
-# --- FUNCIONES DE CORREO (1secmail) ---
+# --- UTILIDADES DE REGISTRO ---
 def get_mail():
     res = requests.get("https://www.1secmail.com/api/v1/?action=genRandomMailbox&count=1").json()
     email = res[0]
@@ -28,100 +30,93 @@ def get_mail():
     return email, user, domain
 
 def wait_for_otp_mail(user, domain):
-    send_log("📩 Esperando OTP en el correo...")
-    for _ in range(20):
-        time.sleep(7)
+    send_log("📩 Esperando código en el correo...")
+    for _ in range(25):
+        time.sleep(5)
         url = f"https://www.1secmail.com/api/v1/?action=getMessages&login={user}&domain={domain}"
         msgs = requests.get(url).json()
         for m in msgs:
-            if "amazon" in m['from'].lower() or "verification" in m['subject'].lower():
+            if "amazon" in m['from'].lower():
                 msg_id = m['id']
                 content = requests.get(f"https://www.1secmail.com/api/v1/?action=readMessage&login={user}&domain={domain}&id={msg_id}").json()
                 otp = re.search(r'(\d{6})', content['body'])
                 if otp: return otp.group(1)
     return None
 
-# --- FUNCIONES DE SMS (SMS-Activate) ---
-def get_sms_number():
-    # 'am' = Amazon, country=0 = Rusia (barato)
-    url = f"https://api.sms-activate.org/stora/api/res.php?api_key={SMS_KEY}&action=getNumber&service=am&country=0"
-    res = requests.get(url).text
-    if "ACCESS_NUMBER" in res:
-        parts = res.split(':')
-        return parts[1], parts[2] # ID, Numero
-    return None, None
-
-def wait_for_otp_sms(id_op):
-    send_log("📱 Esperando OTP de SMS...")
-    url = f"https://api.sms-activate.org/stora/api/res.php?api_key={SMS_KEY}&action=getStatus&id={id_op}"
-    for _ in range(30):
-        time.sleep(10)
-        res = requests.get(url).text
-        if "STATUS_OK" in res:
-            return res.split(':')[1]
-    return None
-
-# --- FLUJO PRINCIPAL ---
+# --- NAVEGACIÓN ---
 def run_bot():
-    send_log("🚀 **Iniciando Proceso de Registro**")
+    send_log("🚀 **Iniciando navegador en la nube...**")
     
+    # Intentar instalar Playwright si falta (doble seguridad para Railway)
+    try:
+        subprocess.run(["playwright", "install", "chromium"], check=True)
+    except:
+        pass
+
     with sync_playwright() as p:
-        # Configuración para Railway/Cloud
-        browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
-        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0")
+        # Argumentos críticos para que no falle en servidores Linux (Railway)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox", 
+                "--disable-setuid-sandbox", 
+                "--disable-dev-shm-usage",
+                "--single-process"
+            ]
+        )
+        
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0"
+        )
         page = context.new_page()
 
         try:
-            # 1. Preparar Datos
+            # 1. Generar datos
             email, user, domain = get_mail()
-            send_log(f"📧 Email: `{email}`")
+            send_log(f"📧 Correo: `{email}`")
 
-            # 2. Navegar a Amazon
-            page.goto("https://www.amazon.com/ap/register", wait_until="networkidle")
-            page.fill("#ap_customer_name", "Test User")
+            # 2. Entrar a Amazon
+            page.goto("https://www.amazon.com/ap/register", wait_until="networkidle", timeout=60000)
+            
+            page.fill("#ap_customer_name", "Alex Hunter")
             page.fill("#ap_email", email)
-            page.fill("#ap_password", "Pass.2026!$")
-            page.fill("#ap_password_check", "Pass.2026!$")
+            page.fill("#ap_password", "CookieBot2026!")
+            page.fill("#ap_password_check", "CookieBot2026!")
+            
+            # Captura de seguridad por si hay captcha
+            page.screenshot(path="status.png")
             page.click("#continue")
             
-            # 3. OTP Correo
-            otp_m = wait_for_otp_mail(user, domain)
-            if otp_m:
-                send_log(f"✅ OTP Mail recibido: `{otp_m}`")
-                page.fill("input[name='code']", otp_m)
-                page.click("#cvf-submit-otp-button")
-                page.wait_for_load_state("networkidle")
+            # 3. Manejo de OTP
+            otp = wait_for_otp_mail(user, domain)
+            if otp:
+                send_log(f"✅ OTP Recibido: `{otp}`")
+                # Intentar rellenar el campo de código si aparece
+                if page.query_selector("input[name='code']"):
+                    page.fill("input[name='code']", otp)
+                    page.click("#cvf-submit-otp-button")
             else:
-                send_log("❌ Error: OTP de correo no llegó.")
+                send_log("❌ No se recibió el OTP a tiempo.")
                 return
 
-            # 4. Verificar si pide SMS
-            if "phone" in page.content().lower() or page.query_selector("#ap_phone_number"):
-                sms_id, phone_num = get_sms_number()
-                if phone_num:
-                    send_log(f"📞 Usando número: `{phone_num}`")
-                    # (Aquí iría la lógica de rellenar el input del teléfono si aparece)
-                    # otp_s = wait_for_otp_sms(sms_id)
-                else:
-                    send_log("⚠️ No hay números disponibles en SMS-Activate.")
-
-            # 5. Finalizar y enviar Cookies
-            send_log("🍪 Extrayendo cookies finales...")
+            # 4. Éxito y Cookies
+            time.sleep(5)
             cookies = context.cookies()
-            cookies_json = json.dumps(cookies, indent=2)
-            
-            # Guardar y enviar archivo a Telegram
             with open("cookies.json", "w") as f:
-                f.write(cookies_json)
+                json.dump(cookies, f, indent=2)
             
-            with open("cookies.json", "rb") as doc:
-                tbot.send_document(CHAT_ID, doc, caption="✅ **¡Registro Exitoso!**\nAquí tienes las cookies.")
+            send_log("🍪 **Cookies extraídas correctamente.** Enviando archivo...")
+            with open("cookies.json", "rb") as f:
+                bot.send_document(CHAT_ID, f, caption="✅ Registro Amazon Exitoso")
 
         except Exception as e:
-            send_log(f"❌ **Error Crítico:** {str(e)}")
+            send_log(f"⚠ **Error:** {str(e)}")
+            page.screenshot(path="error.png")
+            with open("error.png", "rb") as f:
+                bot.send_photo(CHAT_ID, f, caption="Captura del error")
         finally:
             browser.close()
-            send_log("🏁 Navegador cerrado.")
+            send_log("🏁 Proceso finalizado.")
 
 if __name__ == "__main__":
     run_bot()
