@@ -1,2 +1,6 @@
 playwright
 requests
+anticaptchaofficial
+nest_asyncio
+beautifulsoup4
+pyTelegramBotAPI
