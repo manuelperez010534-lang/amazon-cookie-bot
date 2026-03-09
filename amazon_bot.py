@@ -9,127 +9,122 @@ import base64
 import time
 from playwright.async_api import async_playwright
 
-# === DATOS DE CONFIGURACIÓN ===
+# === CONFIGURACIÓN ===
 TOKEN = "8461610558:AAG9_DipzDcqmWYmAbb-LucReBzsI4-t_bE"
 CHAT_ID = "8191397359"
 AC_KEY = "37f2bc34098021f0fcb8ed61cc7b3782"
 
-# Configuración del Proxy (Premium con Auth)
-PROXY_URL = "http://31.59.20.176:6754"
+# Tu Proxy Premium
+PROXY_ADDR = "31.59.20.176:6754"
 PROXY_USER = "hyqgyxhf"
 PROXY_PASS = "30z9ho40bxvp"
 
+PROXY_CONFIG = {
+    "server": f"http://{PROXY_ADDR}",
+    "username": PROXY_USER,
+    "password": PROXY_PASS
+}
+
 REQUESTS_PROXIES = {
-    "http": f"http://{PROXY_USER}:{PROXY_PASS}@31.59.20.176:6754/",
-    "https": f"http://{PROXY_USER}:{PROXY_PASS}@31.59.20.176:6754/"
+    "http": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_ADDR}/",
+    "https": f"http://{PROXY_USER}:{PROXY_PASS}@{PROXY_ADDR}/"
 }
 
 bot = telebot.TeleBot(TOKEN)
 
 def send_log(msg):
     print(msg)
-    try: bot.send_message(CHAT_ID, f"🤖 **Amazon Bot:** {msg}")
+    try: bot.send_message(CHAT_ID, f"🤖 {msg}", parse_mode="Markdown")
     except: pass
 
-# --- MANEJO DE CORREO CON REINTENTOS (ANTI-TIMEOUT) ---
-class Mailer:
+# --- MANEJO DE CORREO (MAIL.TM API) ---
+class MailTM:
     def __init__(self):
+        self.api = "https://api.mail.tm"
         self.session = requests.Session()
         self.session.proxies = REQUESTS_PROXIES
-        self.url = "https://www.guerrillamail.com/ajax.php"
+        self.address = ""
+        self.password = "ZeusBot2026!"
+        self.token = ""
 
-    def safe_get(self, params):
-        """Reintenta 3 veces si el proxy da timeout"""
-        for i in range(3):
+    def get_account(self):
+        try:
+            domain = self.session.get(f"{self.api}/domains").json()['hydra:member'][0]['domain']
+            self.address = f"zeus{random.randint(1000,9999)}@{domain}"
+            res = self.session.post(f"{self.api}/accounts", json={
+                "address": self.address, "password": self.password
+            }, timeout=30)
+            
+            auth = self.session.post(f"{self.api}/token", json={
+                "address": self.address, "password": self.password
+            }).json()
+            self.token = auth['token']
+            self.session.headers.update({"Authorization": f"Bearer {self.token}"})
+            return self.address
+        except Exception as e:
+            send_log(f"❌ Error Mail.tm: {e}")
+            return None
+
+    async def wait_for_otp(self):
+        send_log("📩 Esperando OTP en Mail.tm...")
+        for _ in range(20):
+            await asyncio.sleep(8)
             try:
-                return self.session.get(self.url, params=params, timeout=35)
-            except Exception as e:
-                if i == 2: raise e
-                time.sleep(3)
-        return None
-
-    async def get_email(self):
-        r = self.safe_get({"f": "get_email_address"})
-        return r.json()['email_addr']
-
-    async def get_otp(self):
-        send_log("📩 Monitoreando OTP (Timeout 35s)...")
-        for _ in range(12): # 2 minutos de espera total
-            await asyncio.sleep(10)
-            try:
-                r = self.safe_get({"f": "check_email", "seq": "0"}).json()
-                for m in r.get('list', []):
-                    if "amazon" in m['mail_from'].lower():
-                        full = self.safe_get({"f": "fetch_email", "email_id": m['mail_id']}).json()
-                        otp = re.search(r'(\d{6})', full['mail_body'])
-                        if otp: return otp.group(1)
+                msgs = self.session.get(f"{self.api}/messages").json()['hydra:member']
+                if msgs:
+                    msg_id = msgs[0]['id']
+                    content = self.session.get(f"{self.api}/messages/{msg_id}").json()['text']
+                    otp = re.search(r'(\d{6})', content)
+                    if otp: return otp.group(1)
             except: continue
         return None
 
-# --- RESOLUTOR DE CAPTCHA DIRECTO ---
+# --- RESOLUTOR DE CAPTCHA ---
 async def solve_captcha(page):
     try:
         captcha_img = await page.query_selector('img[src*="captcha"]')
         if not captcha_img: return False
-
-        send_log("🧩 Captcha detectado...")
-        img_url = await captcha_img.get_attribute("src")
         
-        # Descargar imagen usando el proxy
+        img_url = await captcha_img.get_attribute("src")
         img_res = requests.get(img_url, proxies=REQUESTS_PROXIES, timeout=30)
         img_b64 = base64.b64encode(img_res.content).decode('utf-8')
 
         task = requests.post("https://api.anti-captcha.com/createTask", json={
-            "clientKey": AC_KEY,
-            "task": {"type": "ImageToTextTask", "body": img_b64}
-        }, timeout=30).json()
+            "clientKey": AC_KEY, "task": {"type": "ImageToTextTask", "body": img_b64}
+        }).json()
         
         task_id = task.get("taskId")
-        if not task_id: return False
-
         for _ in range(15):
             await asyncio.sleep(3)
             res = requests.post("https://api.anti-captcha.com/getTaskResult", json={
                 "clientKey": AC_KEY, "taskId": task_id
-            }, timeout=30).json()
+            }).json()
             if res.get("status") == "ready":
                 text = res["solution"]["text"]
-                send_log(f"✅ Resuelto: {text}")
+                send_log(f"✅ Captcha: `{text}`")
                 await page.fill("#captchacharacters", text)
                 await page.press("#captchacharacters", "Enter")
                 return True
     except: pass
     return False
 
-# --- PROCESO PRINCIPAL ---
-async def run():
-    mailer = Mailer()
-    nombre = f"Zeus_{random.randint(1000, 9999)}"
-    
+# --- FLUJO DE REGISTRO ---
+async def create_amazon():
+    mail_service = MailTM()
+    email = mail_service.get_account()
+    if not email: return
+
     async with async_playwright() as p:
-        # Navegador configurado con tu Proxy
-        browser = await p.chromium.launch(
-            headless=True,
-            proxy={
-                "server": PROXY_URL,
-                "username": PROXY_USER,
-                "password": PROXY_PASS
-            }
-        )
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0"
-        )
-        page = await context.new_page()
-
         try:
-            email = await mailer.get_email()
-            send_log(f"🚀 Iniciando: {email}")
+            browser = await p.chromium.launch(headless=True, proxy=PROXY_CONFIG)
+            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0")
+            page = await context.new_page()
 
+            send_log(f"🚀 Creando: `{email}`")
             await page.goto("https://www.amazon.com/ap/register", timeout=60000)
             await solve_captcha(page)
 
-            # Formulario
-            await page.fill("#ap_customer_name", nombre)
+            await page.fill("#ap_customer_name", f"Zeus {random.randint(10,99)}")
             await page.fill("#ap_email", email)
             await page.fill("#ap_password", "Admin.2026.!")
             await page.fill("#ap_password_check", "Admin.2026.!")
@@ -138,29 +133,34 @@ async def run():
             await asyncio.sleep(5)
             await solve_captcha(page)
 
-            # OTP
-            otp = await mailer.get_otp()
+            otp = await mail_service.wait_for_otp()
             if otp:
-                send_log(f"🔢 OTP Recibido: {otp}")
+                send_log(f"🔢 OTP: `{otp}`")
                 await page.fill("input[name='code']", otp)
                 await page.click("#cvf-submit-otp-button")
                 await page.wait_for_timeout(10000)
                 
-                # Guardar Cookies Finales
                 cookies = await context.cookies()
-                with open("sesion_amazon.json", "w") as f: json.dump(cookies, f)
-                with open("sesion_amazon.json", "rb") as f:
-                    bot.send_document(CHAT_ID, f, caption=f"✅ Cuenta Creada: {email}")
+                with open("session.json", "w") as f: json.dump(cookies, f)
+                with open("session.json", "rb") as f:
+                    bot.send_document(CHAT_ID, f, caption=f"✅ Amazon Creada: {email}")
             else:
-                send_log("❌ El OTP nunca llegó.")
-
+                send_log("❌ OTP no recibido.")
         except Exception as e:
-            send_log(f"⚠️ Fallo: {str(e)}")
-            await page.screenshot(path="fallo.png")
-            with open("fallo.png", "rb") as f:
-                bot.send_photo(CHAT_ID, f, caption="Evidencia del error")
+            send_log(f"⚠️ Error: {str(e)}")
         finally:
             await browser.close()
 
+# --- BOT INTERFACE ---
+@bot.message_handler(commands=['start'])
+def start_cmd(message):
+    bot.reply_to(message, "ZeuS Bot Online. Usa /crear para una cuenta Amazon.")
+
+@bot.message_handler(commands=['crear'])
+def run_cmd(message):
+    bot.reply_to(message, "⚙️ Iniciando proceso...")
+    asyncio.run(create_amazon())
+
 if __name__ == "__main__":
-    asyncio.run(run())
+    send_log("🔥 Bot iniciado correctamente en Railway")
+    bot.infinity_polling()
