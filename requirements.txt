@@ -1,6 +1,3 @@
-playwright
+playwright==1.42.0
 requests
-anticaptchaofficial
-nest_asyncio
-beautifulsoup4
 pyTelegramBotAPI
